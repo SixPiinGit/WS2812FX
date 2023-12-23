@@ -40,7 +40,9 @@ CHANGELOG
 #ifndef WS2812FX_h
 #define WS2812FX_h
 
-#include "ws2812_i2s/ws2812_i2s.h"
+#include <stdlib.h>
+#include <stdbool.h>
+#include "led_strip.h"
 
 //#define LED_INBUILT_GPIO 2      // this is the onboard LED used to show on/off only
 
@@ -112,6 +114,17 @@ CHANGELOG
 #define FX_MODE_CIRCUS_COMBUSTUS        52
 #define FX_MODE_HALLOWEEN               53
 
+
+typedef union {
+    struct {
+        uint8_t blue; //LSB
+        uint8_t green;
+        uint8_t red;
+        uint8_t white;
+    };
+    uint32_t color; // 0xWWRRGGBB
+} ws2812_pixel_t;
+
 typedef void (*mode)(void);
   
 void
@@ -127,7 +140,8 @@ void
 	WS2812FX_setColor32(uint32_t c),
 	WS2812FX_setBrightness(uint8_t b),
 	WS2812FX_setInverted(bool inverted),
-	WS2812FX_setSlowStart(bool slow_start);
+	WS2812FX_setSlowStart(bool slow_start),
+	WS2812_clear(void);
 
 bool
 	WS2812FX_isRunning(void);

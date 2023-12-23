@@ -46,12 +46,29 @@ CHANGELOG
 
 #include "WS2812FX.h"
 #include <math.h>
-#include <stdlib.h>
 
-#include "FreeRTOS.h"
-#include "task.h"
+#include <freertos/FreeRTOS.h>
+#include "freertos/task.h"
+
+#include <esp_log.h>
+#include "esp_event.h"	//	for usleep
+#include <string.h>
+
+#include "driver/rmt.h"
 
 #define CALL_MODE(n) _mode[n]();
+
+#define RMT_TX_CHANNEL 						RMT_CHANNEL_0
+#define WS2812_GPIO 						22
+#define WS2812_LED_NUMBER					32
+#define WS2812_TIMEOUT						100
+
+static const char *TAG = "ws2812_FX";
+
+typedef enum {
+  PIXEL_RGB = 12,
+  PIXEL_RGBW = 16
+} pixeltype_t;
 
 uint8_t _mode_index = DEFAULT_MODE;
 uint8_t _speed = DEFAULT_SPEED;
@@ -75,7 +92,11 @@ uint8_t get_random_wheel_index(uint8_t);
 
 mode _mode[MODE_COUNT];
 
-ws2812_pixel_t *pixels;
+// ws2812_pixel_t *pixels;
+
+led_strip_t *strip;
+
+// pixel_settings_t px;
 
 //Helpers
 uint32_t color32(uint8_t r, uint8_t g, uint8_t b) {
@@ -114,20 +135,19 @@ static uint32_t max(uint32_t a, uint32_t b) {
 
 //LED Adapter
 void WS2812_show(void) {
-	ws2812_i2s_update(pixels, PIXEL_RGB);
+	ESP_ERROR_CHECK(strip->refresh(strip, WS2812_TIMEOUT));
 }
 
 void WS2812_setPixelColor(uint16_t n, uint8_t r, uint8_t g, uint8_t b) {
 	if (_inverted) { 
 		n = (_led_count - 1) - n; 
 	}
+
+	uint8_t red = map(r, 0, BRIGHTNESS_MAX, BRIGHTNESS_MIN, _brightness);
+	uint8_t green = map(g, 0, BRIGHTNESS_MAX, BRIGHTNESS_MIN, _brightness);
+	uint8_t blue = map(b, 0, BRIGHTNESS_MAX, BRIGHTNESS_MIN, _brightness);
 	
-	ws2812_pixel_t px;
-	px.red = map(r, 0, BRIGHTNESS_MAX, BRIGHTNESS_MIN, _brightness);
-	px.green = map(g, 0, BRIGHTNESS_MAX, BRIGHTNESS_MIN, _brightness);
-	px.blue = map(b, 0, BRIGHTNESS_MAX, BRIGHTNESS_MIN, _brightness);
-	
-	pixels[n] = px;
+	ESP_ERROR_CHECK(strip->set_pixel(strip, n, (uint32_t)red, (uint32_t)green, (uint32_t)blue));
 }
 
 void WS2812_setPixelColor32(uint16_t n, uint32_t c) {
@@ -139,33 +159,43 @@ void WS2812_setPixelColor32(uint16_t n, uint32_t c) {
 }
 
 uint32_t WS2812_getPixelColor(uint16_t n) {
-	return color32(pixels[n].red, pixels[n].green, pixels[n].blue);
+	uint8_t red = 0;
+	uint8_t green = 0;
+	uint8_t blue = 0;
+
+	ESP_ERROR_CHECK(strip->get_pixel(strip, n, &red, &green, &blue));
+
+	return color32(red, green, blue);
 }
 
 void WS2812_clear() {
-	for (int i = 0; i < _led_count; i++) {
-		WS2812_setPixelColor(i, 0, 0, 0);
-	}
-	ws2812_i2s_update(pixels, PIXEL_RGB);
+    ESP_ERROR_CHECK(strip->clear(strip, WS2812_TIMEOUT));
 }
 
 void WS2812_init(uint16_t pixel_count) {
-	_led_count = pixel_count;
-    pixels = (ws2812_pixel_t*) malloc(_led_count * sizeof(ws2812_pixel_t));
-	
-	// initialise the onboard led as a secondary indicator (handy for testing)
-	// gpio_enable(LED_INBUILT_GPIO, GPIO_OUTPUT);
+	_led_count = WS2812_LED_NUMBER;
 
-	// initialise the LED strip
-	ws2812_i2s_init(_led_count, PIXEL_RGB);
+    rmt_config_t config = RMT_DEFAULT_CONFIG_TX(WS2812_GPIO, RMT_TX_CHANNEL);
+    // set counter clock to 40MHz
+    config.clk_div = 2;
+
+    ESP_ERROR_CHECK(rmt_config(&config));
+    ESP_ERROR_CHECK(rmt_driver_install(config.channel, 0, 0));
 	
+    // install ws2812 driver
+    led_strip_config_t strip_config = LED_STRIP_DEFAULT_CONFIG(WS2812_LED_NUMBER, (led_strip_dev_t)config.channel);
+    strip = led_strip_new_rmt_ws2812(&strip_config);
+    if (!strip) {
+        ESP_LOGE(TAG, "install WS2812 driver failed");
+    }
+
 	WS2812_clear();
 }
 
 //WS2812FX
 void WS2812FX_init(uint16_t pixel_count) {
 	WS2812_init(pixel_count);
-	xTaskCreate(WS2812FX_service, "fxService", 255, NULL, 2, NULL);
+	xTaskCreate(WS2812FX_service, "fxService", 2048, NULL, 2, NULL);
 	WS2812FX_initModes();
 	WS2812FX_start();
 }
